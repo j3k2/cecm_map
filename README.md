@@ -12,8 +12,10 @@ Sun Sep 13:
 - Logic from inherited code matched about 16% of location strings to a feature. Updating to `cemsid`, `gispropnum`, `primary_sport`, and `field_number` (points 1-4 above) raises that to about 90%. Using more specific regexp and matching logic to match as many park names, sports, and field numbers as possible.
 
 Roadmap:
+- Use cached data for `Parks Permit Areas`, `Athletic Facilities`, and `Parks Properties`.
 - Remove dependence on `:`. Use `cemsid`, then look for sports keywords in location string, then look for road segment keywords in location string. 
 - Handle comma-separated lists.
+- Handle non-sport parks with no cemsid, other cases which are getting missed.
 - Use GOAT as fallback for no match. 
 - Refactoring
 - Automated testing
