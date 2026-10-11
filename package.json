@@ -1,0 +1,37 @@
+{
+  "name": "cecm_map",
+  "version": "1.0.0",
+  "description": "The `sync-events.js` script will fetch NYC CECM events from the NYC Open Data API (for the next week, by default) and save identified features to a GeoJSON file named `events-features.geojson`.",
+  "homepage": "https://github.com/j3k2/cecm_map#readme",
+  "bugs": {
+    "url": "https://github.com/j3k2/cecm_map/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/j3k2/cecm_map.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "sync-events.js",
+  "scripts": {
+    "sync": "node --env-file=.env sync-events.js"
+  },
+  "dependencies": {
+    "pg": "^8.23.0",
+    "pg-cloudflare": "^1.4.0",
+    "pg-connection-string": "^2.14.0",
+    "pg-int8": "^1.0.1",
+    "pg-pool": "^3.14.0",
+    "pg-protocol": "^1.16.0",
+    "pg-types": "^2.2.0",
+    "pgpass": "^1.0.5",
+    "postgres-array": "^2.0.0",
+    "postgres-bytea": "^1.0.1",
+    "postgres-date": "^1.0.7",
+    "postgres-interval": "^1.2.0",
+    "split2": "^4.2.0",
+    "xtend": "^4.0.2"
+  },
+  "devDependencies": {}
+}
