@@ -1,0 +1,162 @@
+import { formatDate, formatTime } from "./format.js";
+import { onEachFeature } from "./popup.js";
+
+const map = L.map("map", { zoomSnap: 0.25 }).setView([40.73, -73.95], 11);
+let allData, layer, layerByEvent, searchTimer;
+const filters = { type: "", borough: "", date: "", search: "" };
+
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "&copy; OpenStreetMap contributors",
+  maxZoom: 19,
+}).addTo(map);
+
+function zoomToLayer() {
+  const b = layer.getBounds();
+  if (b.isValid()) map.fitBounds(b);
+}
+
+function renderTable(features) {
+  const rows = features
+    .flatMap((f) => f.properties.events)
+    .sort((a, b) => a.start_date_time.localeCompare(b.start_date_time));
+  document.querySelector("#events-table tbody").innerHTML = rows
+    .map(
+      (e) => `<tr data-key="${e.event_id}|${e.start_date_time}">
+        <td>${formatDate(e.start_date_time)}<br>${formatTime(e.start_date_time)}</td>
+        <td>${e.event_name || "Event"}</td>
+        <td>${e.event_type || ""}</td>
+        <td>${e.event_location || ""}</td>
+      </tr>`,
+    )
+    .join("");
+}
+
+const renderMap = () => {
+  if (layer) layer.remove();
+  const features = allData.features
+    .map((f) => ({
+      ...f,
+      properties: {
+        ...f.properties,
+        events: f.properties.events.filter(
+          (e) =>
+            (!filters.type || e.event_type === filters.type) &&
+            (!filters.borough || e.event_borough === filters.borough) &&
+            (!filters.date ||
+              e.start_date_time.slice(0, 10) === filters.date) &&
+            (!filters.search ||
+              ((e.event_name || "") + " " + (e.event_location || ""))
+                .toLowerCase()
+                .includes(filters.search)),
+        ),
+      },
+    }))
+    .filter((f) => f.properties.events.length > 0);
+
+  renderTable(features);
+
+  layer = L.geoJSON(
+    { type: "FeatureCollection", features },
+    { onEachFeature },
+  ).addTo(map);
+
+  layerByEvent = new Map();
+  layer.eachLayer((l) =>
+    l.feature.properties.events.forEach((e) =>
+      layerByEvent.set(e.event_id + "|" + e.start_date_time, l),
+    ),
+  );
+};
+
+fetch("events-features.geojson")
+  .then((res) => res.json())
+  .then((data) => {
+    data.features.sort(
+      (a, b) =>
+        (b.properties.areatype === "Whole Park") -
+        (a.properties.areatype === "Whole Park"),
+    );
+    allData = data;
+
+    function setupFilter(id, field, key) {
+      const select = document.getElementById(id);
+      const values = [
+        ...new Set(
+          allData.features.flatMap((f) =>
+            f.properties.events.map((e) => e[field]),
+          ),
+        ),
+      ]
+        .filter(Boolean)
+        .sort();
+      select.add(new Option("All", ""));
+      values.forEach((v) => select.add(new Option(v, v)));
+      select.onchange = () => {
+        filters[key] = select.value;
+        renderMap();
+        if (key === "borough") {
+          if (select.value) zoomToLayer();
+          else map.setView([40.73, -73.95], 11);
+        }
+      };
+    }
+
+    setupFilter("type-filter", "event_type", "type");
+    setupFilter("borough-filter", "event_borough", "borough");
+
+    const dateSelect = document.getElementById("date-filter");
+    const days = [
+      ...new Set(
+        allData.features.flatMap((f) =>
+          f.properties.events.map((e) => e.start_date_time.slice(0, 10)),
+        ),
+      ),
+    ].sort();
+    dateSelect.add(new Option("All dates", ""));
+    days.forEach((d) =>
+      dateSelect.add(
+        new Option(
+          new Date(d + "T00:00").toLocaleDateString([], {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+          }),
+          d,
+        ),
+      ),
+    );
+    dateSelect.onchange = () => {
+      filters.date = dateSelect.value;
+      renderMap();
+    };
+
+    renderMap();
+    document.querySelector(".filter-component").style.display = "block";
+  });
+
+document.getElementById("search").addEventListener("input", (ev) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    filters.search = ev.target.value.trim().toLowerCase();
+    renderMap();
+  }, 300);
+});
+
+const tbody = document.querySelector("#events-table tbody");
+tbody.addEventListener("mouseover", (ev) => {
+  const row = ev.target.closest("tr");
+  const l = row && layerByEvent.get(row.dataset.key);
+  if (l) l.setStyle({ color: "#dc2626", weight: 3 });
+});
+tbody.addEventListener("mouseout", (ev) => {
+  const row = ev.target.closest("tr");
+  const l = row && layerByEvent.get(row.dataset.key);
+  if (l) layer.resetStyle(l);
+});
+tbody.addEventListener("click", (ev) => {
+  const row = ev.target.closest("tr");
+  const l = row && layerByEvent.get(row.dataset.key);
+  if (!l) return;
+  map.fitBounds(l.getBounds(), { maxZoom: 17 });
+  l.openPopup();
+});
