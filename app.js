@@ -1,14 +1,21 @@
 import { formatDate, formatTime } from "./format.js";
 import { featureCards, eventCount, popupShell } from "./popup.js";
+import { CARTO_API_KEY } from "./config.js";
 
 const map = L.map("map", { zoomSnap: 0.25 }).setView([40.73, -73.95], 11);
 let allData, layer, layerByEvent, searchTimer;
 const filters = { type: "", borough: "", date: "", search: "" };
 
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "&copy; OpenStreetMap contributors",
-  maxZoom: 19,
-}).addTo(map);
+L.tileLayer(
+  `https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key=${CARTO_API_KEY}`,
+  {
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: "abcd",
+    detectRetina: true,
+    maxZoom: 20,
+  },
+).addTo(map);
 
 function zoomToLayer() {
   const b = layer.getBounds();
