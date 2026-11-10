@@ -54,27 +54,29 @@ function renderEventCard(e, isSubsequent, sharedProps, locationName) {
       `;
 }
 
-const onEachFeature = (feature, layer) => {
+function featureCards(feature, locationName, isFirstGroup) {
   const p = feature.properties || {};
   const events =
     Array.isArray(p.events) && p.events.length > 0 ? p.events : [p];
-  const locationName = p.display_name || p.name || "Permitted Area";
+  return events
+    .map((e, i) => renderEventCard(e, !isFirstGroup || i > 0, p, locationName))
+    .join("");
+}
 
-  let eventCardsHtml = "";
-  for (let i = 0; i < events.length; i++) {
-    eventCardsHtml += renderEventCard(events[i], i > 0, p, locationName);
-  }
+function eventCount(feature) {
+  const p = feature.properties || {};
+  return Array.isArray(p.events) && p.events.length > 0 ? p.events.length : 1;
+}
 
-  const popupHtml = `
-                <div class="popup-body">
-                  <div class="popup-header">
-                    <strong>${locationName}</strong> ${events.length > 1 ? `(${events.length} events)` : ""}
-                  </div>
-                  ${eventCardsHtml}
-                </div>
-              `;
+function popupShell(name, count, cards) {
+  return `
+    <div class="popup-body">
+      <div class="popup-header">
+        <strong>${name}</strong> ${count > 1 ? `(${count} events)` : ""}
+      </div>
+      ${cards}
+    </div>
+  `;
+}
 
-  layer.bindPopup(popupHtml, { maxHeight: 300 });
-};
-
-export { onEachFeature };
+export { featureCards, eventCount, popupShell };

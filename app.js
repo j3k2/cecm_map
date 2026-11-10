@@ -1,5 +1,5 @@
 import { formatDate, formatTime } from "./format.js";
-import { onEachFeature } from "./popup.js";
+import { featureCards, eventCount, popupShell } from "./popup.js";
 
 const map = L.map("map", { zoomSnap: 0.25 }).setView([40.73, -73.95], 11);
 let allData, layer, layerByEvent, searchTimer;
@@ -55,10 +55,7 @@ const renderMap = () => {
 
   renderTable(features);
 
-  layer = L.geoJSON(
-    { type: "FeatureCollection", features },
-    { onEachFeature },
-  ).addTo(map);
+  layer = L.geoJSON({ type: "FeatureCollection", features }).addTo(map);
 
   layerByEvent = new Map();
   layer.eachLayer((l) =>
@@ -146,17 +143,76 @@ const tbody = document.querySelector("#events-table tbody");
 tbody.addEventListener("mouseover", (ev) => {
   const row = ev.target.closest("tr");
   const l = row && layerByEvent.get(row.dataset.key);
-  if (l) l.setStyle({ color: "#dc2626", weight: 3 });
+  if (!l) return;
+  l.setStyle({ color: "#dc2626", weight: 3 });
+  l.bringToFront();
 });
 tbody.addEventListener("mouseout", (ev) => {
   const row = ev.target.closest("tr");
   const l = row && layerByEvent.get(row.dataset.key);
-  if (l) layer.resetStyle(l);
+  if (l) l.setStyle({ color: "#3388ff", weight: 3 });
 });
+
 tbody.addEventListener("click", (ev) => {
   const row = ev.target.closest("tr");
   const l = row && layerByEvent.get(row.dataset.key);
   if (!l) return;
   map.fitBounds(l.getBounds(), { maxZoom: 17 });
-  l.openPopup();
+
+  const f = l.feature;
+  const name = featureName(f);
+  L.popup({ maxHeight: 300 })
+    .setLatLng(l.getBounds().getCenter())
+    .setContent(popupShell(name, eventCount(f), featureCards(f, name, true)))
+    .openOn(map);
+});
+
+function featuresAtClick(ev) {
+  const shapes = new Set(
+    document.elementsFromPoint(
+      ev.originalEvent.clientX,
+      ev.originalEvent.clientY,
+    ),
+  );
+  const hits = [];
+  layer.eachLayer((l) => {
+    const isGroup = Boolean(l.getLayers);
+    const parts = isGroup ? l.getLayers() : [l];
+    const partIndex = parts.findIndex((p) => shapes.has(p._path));
+    if (partIndex >= 0) hits.push({ feature: l.feature, isGroup, partIndex });
+  });
+  return hits;
+}
+
+const featureName = (f) =>
+  f.properties.display_name || f.properties.name || "Permitted Area";
+
+const partName = (hit) =>
+  (hit.feature.properties.part_names || [])[hit.partIndex] ||
+  hit.feature.properties.display_name;
+
+map.on("click", (ev) => {
+  if (!layer) return;
+  const hits = featuresAtClick(ev);
+  if (!hits.length) return;
+
+  const singles = hits.filter((h) => !h.isGroup);
+  const groups = hits.filter((h) => h.isGroup);
+  const topSingle = singles[singles.length - 1];
+  const topGroup = groups[groups.length - 1];
+
+  // Header: the topmost single-place feature, else the part of the group clicked.
+  const title = topSingle ? featureName(topSingle.feature) : partName(topGroup);
+
+  // Cards: that single-place feature's events, then any multi-location events.
+  const shown = topSingle ? [topSingle, ...groups] : groups;
+  const cards = shown
+    .map((h, i) => featureCards(h.feature, title, i === 0))
+    .join("");
+  const count = shown.reduce((n, h) => n + eventCount(h.feature), 0);
+
+  L.popup({ maxHeight: 300 })
+    .setLatLng(ev.latlng)
+    .setContent(popupShell(title, count, cards))
+    .openOn(map);
 });

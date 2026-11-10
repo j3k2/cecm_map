@@ -116,7 +116,7 @@ const boroughCode = {
   "STATEN ISLAND": "5",
 };
 
-async function getSegmentGeometry(location_e, borough, event) {
+async function getSegmentFeature(location_e, borough, event) {
   const boroughCodeStr = boroughCode[borough?.toUpperCase()] || "1";
 
   const parsed = parseLocation(location_e);
@@ -265,24 +265,11 @@ function getGispropnumsForFacility(eventFacility, parksPropertiesData) {
 }
 
 function getFacilityFeature(
-  event,
   eventFacility,
   eventArea,
-  parksPermitData,
   athleticsData,
   parksPropertiesData,
 ) {
-  // Try direct cemsid match against Parks Permit Areas first.
-  const cemsMatch = parksPermitData.find((facility) => {
-    return parseInt(facility.properties.cemsid) === parseInt(event.cemsid);
-  });
-  if (cemsMatch) {
-    const park = cemsMatch.properties.propertyname || eventFacility;
-    const sub = cemsMatch.properties.name || eventArea;
-    cemsMatch.properties.display_name =
-      sub && sub !== park ? `${park}: ${sub}` : park;
-    return cemsMatch;
-  }
   // For athletic facility lookup:
   // Get gispropnums matching the facility name in the location string.
   const gispropnums = getGispropnumsForFacility(
@@ -326,12 +313,7 @@ function getFacilityFeature(
   return null;
 }
 
-async function getFeatureFromLocation(
-  event,
-  parksPermitData,
-  athleticsData,
-  parksPropertiesData,
-) {
+async function getFeatureByName(event, athleticsData, parksPropertiesData) {
   const location = event.event_location;
   if (!location) return null;
 
@@ -340,10 +322,8 @@ async function getFeatureFromLocation(
   if (location.includes(":")) {
     const [facility, area] = location.split(":").map((s) => s.trim());
     const feature = getFacilityFeature(
-      event,
       facility,
       area,
-      parksPermitData,
       athleticsData,
       parksPropertiesData,
     );
@@ -351,7 +331,65 @@ async function getFeatureFromLocation(
     return feature;
   }
 
-  return getSegmentGeometry(location, borough, event);
+  return getSegmentFeature(location, borough, event);
+}
+
+function getFeatureByCemsid(cemsid, parksPermitData) {
+  const cemsMatch = parksPermitData.find((facility) => {
+    return parseInt(facility.properties.cemsid) === parseInt(cemsid);
+  });
+  if (cemsMatch) {
+    const park = cemsMatch.properties.propertyname;
+    const sub = cemsMatch.properties.name;
+    cemsMatch.properties.display_name =
+      !sub || sub === park ? park : park ? `${park}: ${sub}` : sub;
+  }
+  return cemsMatch;
+}
+
+async function getFeaturesFromEvent(
+  event,
+  parksPermitData,
+  athleticsData,
+  parksPropertiesData,
+) {
+  // Get all cemsids and location names:
+  const cemsids = String(event.cemsid || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const locations = (event.event_location || "")
+    .split(",")
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const features = [];
+
+  // Match by cemsid:
+  for (const cemsid of cemsids) {
+    const feature = getFeatureByCemsid(cemsid, parksPermitData);
+    if (feature) features.push(feature);
+  }
+
+  // Match by name:
+  for (const location of locations) {
+    const feature = await getFeatureByName(
+      { ...event, event_location: location, cemsid: null },
+      athleticsData,
+      parksPropertiesData,
+    );
+    if (feature) features.push(feature);
+  }
+
+  // Dedupe by matched feature id:
+  return [
+    ...new Map(
+      features.map((f) => [
+        f.properties.system || JSON.stringify(f.geometry.coordinates),
+        f,
+      ]),
+    ).values(),
+  ];
 }
 
 // const failureShapes = new Map();
@@ -407,14 +445,17 @@ async function processEvents() {
   let matchedCount = 0;
 
   for (const event of events) {
-    const feature = await getFeatureFromLocation(
+    const matches = await getFeaturesFromEvent(
       event,
       parksPermitData,
       athleticsData,
       parksPropertiesData,
     );
-    if (feature) {
-      matchedCount++;
+    if (matches.length > 0) matchedCount++;
+
+    if (matches.length === 1) {
+      // one location for this event:
+      const feature = matches[0];
       const key =
         feature.properties.system ||
         JSON.stringify(feature.geometry.coordinates);
@@ -430,6 +471,20 @@ async function processEvents() {
       } else {
         featureMap.get(key).properties.events.push(event);
       }
+    } else if (matches.length > 1) {
+      // multiple locations for this event:
+      featureMap.set(`event:${event.key}`, {
+        type: "Feature",
+        geometry: {
+          type: "GeometryCollection",
+          geometries: matches.map((f) => f.geometry),
+        },
+        properties: {
+          display_name: event.event_name,
+          part_names: matches.map((f) => f.properties.display_name),
+          events: [event],
+        },
+      });
     }
   }
 
