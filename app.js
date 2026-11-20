@@ -39,6 +39,8 @@ function renderTable(features) {
 }
 
 const renderMap = () => {
+  map.closePopup();
+  document.getElementById("table-panel").scrollTop = 0;
   if (layer) layer.remove();
   const features = allData.features
     .map((f) => ({
@@ -70,6 +72,11 @@ const renderMap = () => {
       layerByEvent.set(e.event_id + "|" + e.start_date_time, l),
     ),
   );
+
+  const bounds = layer.getBounds();
+  if (bounds.isValid() && !map.getBounds().contains(bounds)) {
+    map.fitBounds(bounds);
+  }
 };
 
 fetch("events-features.geojson")
