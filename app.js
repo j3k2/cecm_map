@@ -181,7 +181,7 @@ tbody.addEventListener("click", (ev) => {
     .openOn(map);
 });
 
-function featuresAtClick(ev) {
+function featuresAtCursor(ev) {
   const shapes = new Set(
     document.elementsFromPoint(
       ev.originalEvent.clientX,
@@ -205,9 +205,11 @@ const partName = (hit) =>
   (hit.feature.properties.part_names || [])[hit.partIndex] ||
   hit.feature.properties.display_name;
 
-map.on("click", (ev) => {
+function showPopup(ev) {
   if (!layer) return;
-  const hits = featuresAtClick(ev);
+  if (ev.originalEvent.target.closest(".leaflet-popup")) return;
+
+  const hits = featuresAtCursor(ev);
   if (!hits.length) return;
 
   const singles = hits.filter((h) => !h.isGroup);
@@ -215,7 +217,7 @@ map.on("click", (ev) => {
   const topSingle = singles[singles.length - 1];
   const topGroup = groups[groups.length - 1];
 
-  // Header: the topmost single-place feature, else the part of the group clicked.
+  // Header: the topmost single-place feature, else the part of the group selected.
   const title = topSingle ? featureName(topSingle.feature) : partName(topGroup);
 
   // Cards: that single-place feature's events, then any multi-location events.
@@ -229,4 +231,11 @@ map.on("click", (ev) => {
     .setLatLng(ev.latlng)
     .setContent(popupShell(title, count, cards))
     .openOn(map);
+}
+
+map.on("click", (ev) => showPopup(ev));
+let hoverTimer;
+map.on("mousemove", (ev) => {
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => showPopup(ev), 100);
 });
