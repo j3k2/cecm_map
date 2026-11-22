@@ -12,10 +12,22 @@ body {
   height: 100%;
 }
 
-#table-panel {
+#sidebar {
   width: 480px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+#table-panel {
+  flex: 1;
   overflow-y: auto;
   font: 12px sans-serif;
+}
+.filter-component {
+  display: none;
+  padding: 6px 8px;
+  background: white;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 #events-table {
@@ -37,17 +49,6 @@ body {
     vertical-align: top;
     min-width: 100px;
   }
-}
-.filter-component {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 1000;
-  display: none;
-  background: white;
-  padding: 6px 8px;
-  border-radius: 6px;
-  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3);
 }
 
 .leaflet-popup-content-wrapper {

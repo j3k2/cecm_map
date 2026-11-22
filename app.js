@@ -88,20 +88,17 @@ fetch("events-features.geojson")
         (a.properties.areatype === "Whole Park"),
     );
     allData = data;
-
-    function setupFilter(id, field, key) {
+    function setupFilter(id, key, getValue, getLabel = (v) => v) {
       const select = document.getElementById(id);
       const values = [
         ...new Set(
-          allData.features.flatMap((f) =>
-            f.properties.events.map((e) => e[field]),
-          ),
+          allData.features.flatMap((f) => f.properties.events.map(getValue)),
         ),
       ]
         .filter(Boolean)
         .sort();
-      select.add(new Option("All", ""));
-      values.forEach((v) => select.add(new Option(v, v)));
+      select.add(new Option(`All ${key}s`, ""));
+      values.forEach((v) => select.add(new Option(getLabel(v), v)));
       select.onchange = () => {
         filters[key] = select.value;
         renderMap();
@@ -112,34 +109,19 @@ fetch("events-features.geojson")
       };
     }
 
-    setupFilter("type-filter", "event_type", "type");
-    setupFilter("borough-filter", "event_borough", "borough");
-
-    const dateSelect = document.getElementById("date-filter");
-    const days = [
-      ...new Set(
-        allData.features.flatMap((f) =>
-          f.properties.events.map((e) => e.start_date_time.slice(0, 10)),
-        ),
-      ),
-    ].sort();
-    dateSelect.add(new Option("All dates", ""));
-    days.forEach((d) =>
-      dateSelect.add(
-        new Option(
-          new Date(d + "T00:00").toLocaleDateString([], {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-          }),
-          d,
-        ),
-      ),
+    setupFilter("type-filter", "type", (e) => e.event_type);
+    setupFilter("borough-filter", "borough", (e) => e.event_borough);
+    setupFilter(
+      "date-filter",
+      "date",
+      (e) => e.start_date_time.slice(0, 10),
+      (d) =>
+        new Date(d + "T00:00").toLocaleDateString([], {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }),
     );
-    dateSelect.onchange = () => {
-      filters.date = dateSelect.value;
-      renderMap();
-    };
 
     renderMap();
     document.querySelector(".filter-component").style.display = "block";
@@ -237,5 +219,5 @@ map.on("click", (ev) => showPopup(ev));
 let hoverTimer;
 map.on("mousemove", (ev) => {
   clearTimeout(hoverTimer);
-  hoverTimer = setTimeout(() => showPopup(ev), 100);
+  hoverTimer = setTimeout(() => showPopup(ev), 300);
 });

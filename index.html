@@ -11,26 +11,32 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div id="table-panel">
-      <table id="events-table">
-        <thead>
-          <tr>
-            <th>When</th>
-            <th>Event</th>
-            <th>Type</th>
-            <th>Location</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <div id="sidebar">
+      <div class="filter-component">
+        <select id="date-filter"></select>
+        <select id="type-filter"></select>
+        <select id="borough-filter"></select>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search events or places"
+        />
+      </div>
+      <div id="table-panel">
+        <table id="events-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Event</th>
+              <th>Type</th>
+              <th>Location</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
     <div id="map"></div>
-    <div class="filter-component">
-      <select id="type-filter"></select>
-      <select id="borough-filter"></select>
-      <select id="date-filter"></select>
-      <input id="search" type="search" placeholder="Search events or places" />
-    </div>
     <script type="module" src="app.js"></script>
   </body>
 </html>
