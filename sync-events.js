@@ -20,6 +20,11 @@ if (!GOAT_API_KEY) {
   process.exit(1);
 }
 
+const OUTPUT_FILENAME = "events-features.geojson";
+const WEEK_FILTER = true;
+const PAGE_SIZE = 1000;
+const OFFSET_MAX = 10; // for testing only
+const applyOffsetMax = false; // for testing only
 const FALLBACK_DISTRICT = "police_precinct";
 
 const FALLBACK_DISTRICTS = {
@@ -49,12 +54,6 @@ const FALLBACK_DISTRICTS = {
         .map(Number),
   },
 };
-
-const OUTPUT_FILENAME = "events-features.geojson";
-const WEEK_FILTER = true;
-const PAGE_SIZE = 1000;
-const OFFSET_MAX = 10; // for testing only
-const applyOffsetMax = false; // for testing only
 
 async function fetchAll(
   baseUrl,
@@ -93,10 +92,10 @@ async function fetchAll(
 
 async function loadReferenceData() {
   return {
-    parksPermitData: await fetchAll(PARKS_PERMIT_API, {
+    parksPermitAreasData: await fetchAll(PARKS_PERMIT_API, {
       extractArray: (d) => d.features,
     }),
-    athleticsData: await fetchAll(ATHLETICS_API, {
+    athleticFacilitiesData: await fetchAll(ATHLETICS_API, {
       extractArray: (d) => d.features,
     }),
     parksPropertiesData: await fetchAll(PARKS_PROPERTIES_API, {
@@ -257,17 +256,19 @@ function getSportCode(sportName) {
   return bestMatch;
 }
 
-function parseFacilityText(eventArea) {
-  if (!eventArea) return null;
+function parseFacilityText(eventFacility) {
+  if (!eventFacility) return null;
 
   // Identify and separate `sportName` and `fieldId` by dash or space.
   // `fieldId` can be one letter, 1-3 numbers, or 1-3 numbers and one suffix letter.
-  const match = eventArea.match(/^(.+?)[\s-]+(\d{1,3}[A-Za-z]?|[A-Za-z])\b/);
+  const match = eventFacility.match(
+    /^(.+?)[\s-]+(\d{1,3}[A-Za-z]?|[A-Za-z])\b/,
+  );
   if (match) {
     return { sportName: match[1].trim(), fieldId: match[2] };
   }
 
-  return { sportName: eventArea.trim(), fieldId: null };
+  return { sportName: eventFacility.trim(), fieldId: null };
 }
 
 function normalizeFieldId(n) {
@@ -278,51 +279,114 @@ function normalizeFieldId(n) {
     .toUpperCase();
 }
 
-function getGispropnumsForFacility(eventFacility, parksPropertiesData) {
-  const facilityNames = [
-    eventFacility,
-    eventFacility.replace(/\s*\([^)]*\)\s*$/, "").trim(), // remove parenthetical suffix from name
+function getPropertyNames(eventProperty) {
+  const propertyNames = [
+    eventProperty,
+    eventProperty.replace(/\s*\([^)]*\)\s*$/, "").trim(), // remove parenthetical suffix from name
   ]
     .flatMap((name) => name.split("/").map((s) => s.trim())) // if two names separated by /, try both
     .map((name) => name.toLowerCase())
     .filter(Boolean);
 
-  const candidates = [...new Set(facilityNames)];
+  return [...new Set(propertyNames)];
+}
+
+function getGispropnumsForProperty(eventProperty, parksPropertiesData) {
+  const candidates = getPropertyNames(eventProperty);
 
   return parksPropertiesData
-    .filter((facility) => {
-      const signname = facility.properties.signname?.trim().toLowerCase();
+    .filter((property) => {
+      const signname = property.properties.signname?.trim().toLowerCase();
       return candidates.some(
         (c) =>
           signname === c || signname?.startsWith(c) || signname?.includes(c),
       );
     })
-    .map((facility) => facility.properties.gispropnum);
+    .map((property) => property.properties.gispropnum);
 }
 
-function getFacilityFeature(
+function nameSimilarity(signname, candidates) {
+  // Lower is more similar:
+  if (candidates.some((c) => signname === c)) return 0;
+  if (candidates.some((c) => signname.startsWith(c))) return 1;
+  if (candidates.some((c) => signname.includes(c))) return 2;
+  return null;
+}
+
+function getParksProperty(eventProperty, parksPropertiesData) {
+  const candidates = getPropertyNames(eventProperty);
+  const matches = parksPropertiesData
+    .map((f) => ({ f, signname: f.properties.signname?.trim().toLowerCase() }))
+    .filter(
+      (m) => m.signname && nameSimilarity(m.signname, candidates) !== null,
+    )
+    .sort(
+      (a, b) =>
+        nameSimilarity(a.signname, candidates) -
+          nameSimilarity(b.signname, candidates) ||
+        a.signname.length - b.signname.length,
+    );
+  if (matches.length === 0) return null;
+
+  const park = matches[0].f;
+  return {
+    type: "Feature",
+    geometry: park.geometry,
+    properties: {
+      system: `park:${park.properties.gispropnum}`,
+      gispropnum: park.properties.gispropnum,
+      display_name: park.properties.signname,
+      approximate: true,
+    },
+  };
+}
+
+function getParkByName(parkName, parksPermitAreasData, parksPropertiesData) {
+  // Try parksPermitAreasData by exact name:
+  const name = parkName.trim().toLowerCase();
+  const permitAreaPark = parksPermitAreasData.find(
+    (f) =>
+      f.properties.areatype === "Whole Park" &&
+      f.properties.propertyname?.trim().toLowerCase() === name,
+  );
+  if (permitAreaPark) {
+    return {
+      type: "Feature",
+      geometry: permitAreaPark.geometry,
+      properties: {
+        ...permitAreaPark.properties,
+        display_name: permitAreaPark.properties.propertyname,
+        approximate: true,
+      },
+    };
+  }
+  // Then try parksPropertiesData by most similar name:
+  return getParksProperty(parkName, parksPropertiesData);
+}
+
+function getFacility(
+  eventProperty,
   eventFacility,
-  eventArea,
-  athleticsData,
+  athleticFacilitiesData,
   parksPropertiesData,
 ) {
   // For athletic facility lookup:
-  // Get gispropnums matching the facility name in the location string.
-  const gispropnums = getGispropnumsForFacility(
-    eventFacility,
+  // Get gispropnums matching the property name in the location string.
+  const gispropnums = getGispropnumsForProperty(
+    eventProperty,
     parksPropertiesData,
   );
   if (gispropnums.length === 0) return null;
 
   // Parse location string into sport code and field number.
-  const parsedArea = parseFacilityText(eventArea);
-  if (!parsedArea) return null;
-  const code = getSportCode(parsedArea.sportName);
+  const parsedFacility = parseFacilityText(eventFacility);
+  if (!parsedFacility) return null;
+  const code = getSportCode(parsedFacility.sportName);
   if (!code) return null;
-  const fieldId = parsedArea.fieldId;
+  const fieldId = parsedFacility.fieldId;
 
   // Filter Athletic Facilities by that gispropnum
-  const candidates = athleticsData.filter((facility) =>
+  const candidates = athleticFacilitiesData.filter((facility) =>
     gispropnums.includes(facility.properties.gispropnum),
   );
 
@@ -331,7 +395,7 @@ function getFacilityFeature(
     (f) => f.properties.primary_sport === code,
   );
 
-  const athleticMatch =
+  const facilityMatch =
     sportMatches.find(
       (f) =>
         f.properties.field_number &&
@@ -340,39 +404,52 @@ function getFacilityFeature(
           normalizeFieldId(fieldId),
     ) || (sportMatches.length === 1 ? sportMatches[0] : null);
 
-  if (athleticMatch) {
-    const fieldNum = athleticMatch.properties.field_number;
-    const sub = fieldNum ? `Field ${fieldNum}` : eventArea;
-    athleticMatch.properties.display_name = `${eventFacility}: ${sub}`;
-    return athleticMatch;
+  if (facilityMatch) {
+    const fieldNum = facilityMatch.properties.field_number;
+    const sub = fieldNum ? `Field ${fieldNum}` : eventFacility;
+    facilityMatch.properties.display_name = `${eventProperty}: ${sub}`;
+    return facilityMatch;
   }
   return null;
 }
 
-async function getFeatureByName(event, athleticsData, parksPropertiesData) {
+async function getFeatureByName(
+  event,
+  parksPermitAreasData,
+  athleticFacilitiesData,
+  parksPropertiesData,
+) {
   const location = event.event_location;
   if (!location) return null;
 
   const borough = event.event_borough;
 
   if (location.includes(":")) {
-    const [facility, area] = location.split(":").map((s) => s.trim());
-    const feature = getFacilityFeature(
-      facility,
-      area,
-      athleticsData,
-      parksPropertiesData,
-    );
+    const [property, facility] = location.split(":").map((s) => s.trim());
+    // Look for facility match:
+    const feature =
+      getFacility(
+        property,
+        facility,
+        athleticFacilitiesData,
+        parksPropertiesData,
+      ) ||
+      // If facility match not found, look for park match:
+      getParkByName(property, parksPermitAreasData, parksPropertiesData);
     // if (!feature) console.warn('Could not match to facility', location)
     return feature;
   }
 
-  return getSegmentFeature(location, borough, event);
+  const street = await getSegmentFeature(location, borough, event);
+  if (street || parseLocation(location)) return street;
+
+  // If no ':' and not street segment, try park by name:
+  return getParkByName(location, parksPermitAreasData, parksPropertiesData);
 }
 
-function getFeatureByCemsid(cemsid, parksPermitData) {
-  const cemsMatch = parksPermitData.find((facility) => {
-    return parseInt(facility.properties.cemsid) === parseInt(cemsid);
+function getFeatureByCemsid(cemsid, parksPermitAreasData) {
+  const cemsMatch = parksPermitAreasData.find((permitArea) => {
+    return parseInt(permitArea.properties.cemsid) === parseInt(cemsid);
   });
   if (cemsMatch) {
     const park = cemsMatch.properties.propertyname;
@@ -406,8 +483,8 @@ function getFeaturesFromDistrict(event, fallbackDistricts) {
 
 async function getFeaturesFromEvent(
   event,
-  parksPermitData,
-  athleticsData,
+  parksPermitAreasData,
+  athleticFacilitiesData,
   parksPropertiesData,
   fallbackDistricts,
 ) {
@@ -425,7 +502,8 @@ async function getFeaturesFromEvent(
 
   // Match by cemsid:
   for (const cemsid of cemsids) {
-    const feature = getFeatureByCemsid(cemsid, parksPermitData);
+    if (cemsid === "0") continue; // ignore placeholder 0
+    const feature = getFeatureByCemsid(cemsid, parksPermitAreasData);
     if (feature) features.push(feature);
   }
 
@@ -433,33 +511,45 @@ async function getFeaturesFromEvent(
   for (const location of locations) {
     const feature = await getFeatureByName(
       { ...event, event_location: location, cemsid: null },
-      athleticsData,
+      parksPermitAreasData,
+      athleticFacilitiesData,
       parksPropertiesData,
     );
     if (feature) features.push(feature);
   }
 
-  // Dedupe by matched feature id:
-  const unique = [
-    ...new Map(
-      features.map((f) => [
-        f.properties.system || JSON.stringify(f.geometry.coordinates),
-        f,
-      ]),
-    ).values(),
-  ];
+  // Dedupe by feature id or coordinates:
+  const byKey = new Map();
+  for (const f of features) {
+    const key = f.properties.system || JSON.stringify(f.geometry.coordinates);
+    if (!byKey.has(key)) byKey.set(key, f);
+  }
+  const deduped = [...byKey.values()];
 
-  if (unique.length === 0)
-    return getFeaturesFromDistrict(event, fallbackDistricts);
-  return unique;
+  // Prioritize more precise match:
+  const uniqueMatch = deduped.filter((f, i) => {
+    const gispropnum = f.properties.gispropnum;
+    if (!f.properties.approximate || !gispropnum) return true;
+    return !deduped.some(
+      (o, j) =>
+        o.properties.gispropnum === gispropnum &&
+        (!o.properties.approximate || j < i),
+    );
+  });
+
+  if (uniqueMatch.length > 0) return uniqueMatch;
+
+  // Fallback to district if no match found:
+  return getFeaturesFromDistrict(event, fallbackDistricts);
 }
 
-// Approximate area in square miles (flat projection near NYC), for polygons only:
+// Approximate area in square miles (flat projection near NYC)
 const METERS_PER_DEG_LAT = 110574;
 const METERS_PER_DEG_LON = 111320 * Math.cos((40.7 * Math.PI) / 180);
 const SQ_METERS_PER_SQ_MILE = 2589988;
 
 function ringArea(ring) {
+  // Shoelace formula for calculating the area of the linear ring of a polygon:
   let sum = 0;
   for (let i = 0; i < ring.length - 1; i++) {
     const x1 = ring[i][0] * METERS_PER_DEG_LON;
@@ -488,6 +578,7 @@ function geometryArea(geometry) {
   if (geometry.type === "GeometryCollection") {
     return geometry.geometries.reduce((sum, g) => sum + geometryArea(g), 0);
   }
+  // Lines have 0 area:
   return 0;
 }
 
@@ -516,8 +607,8 @@ async function processEvents() {
       : undefined,
   );
   const {
-    parksPermitData,
-    athleticsData,
+    parksPermitAreasData,
+    athleticFacilitiesData,
     parksPropertiesData,
     fallbackDistricts,
   } = await loadReferenceData();
@@ -528,19 +619,38 @@ async function processEvents() {
   }));
 
   let matchedCount = 0;
+  let approximateParkCount = 0;
+  let approximateDistrictCount = 0;
+  let unmatchedCount = 0;
 
   for (const event of events) {
     const matches = await getFeaturesFromEvent(
       event,
-      parksPermitData,
-      athleticsData,
+      parksPermitAreasData,
+      athleticFacilitiesData,
       parksPropertiesData,
       fallbackDistricts,
     );
-    if (matches.some((f) => !f.properties.approximate)) matchedCount++;
 
+    if (matches.length === 0) {
+      unmatchedCount++;
+    } else if (matches.every((f) => f.properties.approximate)) {
+      if (
+        matches.every((f) =>
+          f.properties.system?.startsWith(`${FALLBACK_DISTRICT}:`),
+        )
+      ) {
+        approximateDistrictCount++;
+      } else {
+        approximateParkCount++;
+      }
+    } else {
+      matchedCount++;
+    }
+
+    // If approximate match used, save name to a separate field:
     if (matches.length > 0 && matches.every((f) => f.properties.approximate)) {
-      event.district_name = matches
+      event.approximate_name = matches
         .map((f) => f.properties.display_name)
         .join(", ");
     }
@@ -589,7 +699,7 @@ async function processEvents() {
   };
 
   console.log(
-    `${matchedCount}/${events.length} events matched across ${featureMap.size} unique map features`,
+    `${events.length} events: ${matchedCount} matched, ${approximateParkCount} park fallback, ${approximateDistrictCount} district fallback, ${unmatchedCount} not included; ${featureMap.size} unique map features`,
   );
 
   writeGeoJSON(featureCollection);

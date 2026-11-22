@@ -32,7 +32,7 @@ function renderTable(features) {
         <td>${formatDate(e.start_date_time)}<br>${formatTime(e.start_date_time)}</td>
         <td>${e.event_name || "Event"}</td>
         <td>${e.event_type || ""}</td>
-        <td>${e.event_location || ""}${e.district_name ? ` (${e.district_name})` : ""}</td>
+        <td>${e.event_location || ""}${e.approximate_name ? ` (${e.approximate_name})` : ""}</td>
         </tr>`,
     )
     .join("");
