@@ -32,8 +32,8 @@ function renderTable(features) {
         <td>${formatDate(e.start_date_time)}<br>${formatTime(e.start_date_time)}</td>
         <td>${e.event_name || "Event"}</td>
         <td>${e.event_type || ""}</td>
-        <td>${e.event_location || ""}</td>
-      </tr>`,
+        <td>${e.event_location || ""}${e.district_name ? ` (${e.district_name})` : ""}</td>
+        </tr>`,
     )
     .join("");
 }
@@ -83,9 +83,7 @@ fetch("events-features.geojson")
   .then((res) => res.json())
   .then((data) => {
     data.features.sort(
-      (a, b) =>
-        (b.properties.areatype === "Whole Park") -
-        (a.properties.areatype === "Whole Park"),
+      (a, b) => (b.properties.area || 0) - (a.properties.area || 0),
     );
     allData = data;
     function setupFilter(id, key, getValue, getLabel = (v) => v) {

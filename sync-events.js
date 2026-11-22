@@ -20,6 +20,36 @@ if (!GOAT_API_KEY) {
   process.exit(1);
 }
 
+const FALLBACK_DISTRICT = "police_precinct";
+
+const FALLBACK_DISTRICTS = {
+  community_district: {
+    api: "https://data.cityofnewyork.us/resource/5crt-au7u.geojson",
+    idField: "boro_cd", // borough digit + board number, e.g. 412
+    label: "Community District",
+    getIds: (event) => {
+      const digit = Number(boroughCode[event.event_borough?.toUpperCase()]);
+      if (!digit) return [];
+      return String(event.community_board || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((board) => digit * 100 + Number(board));
+    },
+  },
+  police_precinct: {
+    api: "https://data.cityofnewyork.us/resource/y76i-bdw7.geojson",
+    idField: "precinct",
+    label: "Police Precinct",
+    getIds: (event) =>
+      String(event.police_precinct || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map(Number),
+  },
+};
+
 const OUTPUT_FILENAME = "events-features.geojson";
 const WEEK_FILTER = true;
 const PAGE_SIZE = 1000;
@@ -72,6 +102,12 @@ async function loadReferenceData() {
     parksPropertiesData: await fetchAll(PARKS_PROPERTIES_API, {
       extractArray: (d) => d.features,
     }),
+    fallbackDistricts: await fetchAll(
+      FALLBACK_DISTRICTS[FALLBACK_DISTRICT].api,
+      {
+        extractArray: (d) => d.features,
+      },
+    ),
   };
 }
 
@@ -347,11 +383,33 @@ function getFeatureByCemsid(cemsid, parksPermitData) {
   return cemsMatch;
 }
 
+function getFeaturesFromDistrict(event, fallbackDistricts) {
+  const area = FALLBACK_DISTRICTS[FALLBACK_DISTRICT];
+  return area.getIds(event).flatMap((id) => {
+    const polygon = fallbackDistricts.find(
+      (f) => Number(f.properties[area.idField]) === id,
+    );
+    if (!polygon) return [];
+    return [
+      {
+        type: "Feature",
+        geometry: polygon.geometry,
+        properties: {
+          system: `${FALLBACK_DISTRICT}:${id}`,
+          display_name: `${area.label} ${id}`,
+          approximate: true,
+        },
+      },
+    ];
+  });
+}
+
 async function getFeaturesFromEvent(
   event,
   parksPermitData,
   athleticsData,
   parksPropertiesData,
+  fallbackDistricts,
 ) {
   // Get all cemsids and location names:
   const cemsids = String(event.cemsid || "")
@@ -382,7 +440,7 @@ async function getFeaturesFromEvent(
   }
 
   // Dedupe by matched feature id:
-  return [
+  const unique = [
     ...new Map(
       features.map((f) => [
         f.properties.system || JSON.stringify(f.geometry.coordinates),
@@ -390,25 +448,48 @@ async function getFeaturesFromEvent(
       ]),
     ).values(),
   ];
+
+  if (unique.length === 0)
+    return getFeaturesFromDistrict(event, fallbackDistricts);
+  return unique;
 }
 
-// const failureShapes = new Map();
+// Approximate area in square miles (flat projection near NYC), for polygons only:
+const METERS_PER_DEG_LAT = 110574;
+const METERS_PER_DEG_LON = 111320 * Math.cos((40.7 * Math.PI) / 180);
+const SQ_METERS_PER_SQ_MILE = 2589988;
 
-// function recordFailure(location) {
-//   const hasComma = location.includes(',');
-//   const hasSlash = location.includes('/');
-//   const hasColon = location.includes(':');
-//   const hasParens = /\(/.test(location);
-//   const hasBetween = /\bbetween\b/i.test(location);
-//   const hasDashNumber = /-\d+/.test(location);
+function ringArea(ring) {
+  let sum = 0;
+  for (let i = 0; i < ring.length - 1; i++) {
+    const x1 = ring[i][0] * METERS_PER_DEG_LON;
+    const y1 = ring[i][1] * METERS_PER_DEG_LAT;
+    const x2 = ring[i + 1][0] * METERS_PER_DEG_LON;
+    const y2 = ring[i + 1][1] * METERS_PER_DEG_LAT;
+    sum += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(sum) / 2;
+}
 
-//   const shape = `colon:${hasColon}|comma:${hasComma}|slash:${hasSlash}|parens:${hasParens}|between:${hasBetween}|dashNum:${hasDashNumber}`;
+function polygonArea([outer, ...holes]) {
+  return ringArea(outer) - holes.reduce((sum, h) => sum + ringArea(h), 0);
+}
 
-//   if (!failureShapes.has(shape)) {
-//     failureShapes.set(shape, { count: 0, example: location });
-//   }
-//   failureShapes.get(shape).count++;
-// }
+function geometryArea(geometry) {
+  if (geometry.type === "Polygon") {
+    return polygonArea(geometry.coordinates) / SQ_METERS_PER_SQ_MILE;
+  }
+  if (geometry.type === "MultiPolygon") {
+    return geometry.coordinates.reduce(
+      (sum, polygon) => sum + polygonArea(polygon) / SQ_METERS_PER_SQ_MILE,
+      0,
+    );
+  }
+  if (geometry.type === "GeometryCollection") {
+    return geometry.geometries.reduce((sum, g) => sum + geometryArea(g), 0);
+  }
+  return 0;
+}
 
 function writeGeoJSON(featureCollection) {
   const tempPath = `${OUTPUT_FILENAME}.tmp`;
@@ -434,8 +515,12 @@ async function processEvents() {
         }
       : undefined,
   );
-  const { parksPermitData, athleticsData, parksPropertiesData } =
-    await loadReferenceData();
+  const {
+    parksPermitData,
+    athleticsData,
+    parksPropertiesData,
+    fallbackDistricts,
+  } = await loadReferenceData();
 
   const events = currentEvents.map((e) => ({
     key: `${e.event_id}_${e.start_date_time}`,
@@ -450,8 +535,15 @@ async function processEvents() {
       parksPermitData,
       athleticsData,
       parksPropertiesData,
+      fallbackDistricts,
     );
-    if (matches.length > 0) matchedCount++;
+    if (matches.some((f) => !f.properties.approximate)) matchedCount++;
+
+    if (matches.length > 0 && matches.every((f) => f.properties.approximate)) {
+      event.district_name = matches
+        .map((f) => f.properties.display_name)
+        .join(", ");
+    }
 
     if (matches.length === 1) {
       // one location for this event:
@@ -490,18 +582,15 @@ async function processEvents() {
 
   const featureCollection = {
     type: "FeatureCollection",
-    features: Array.from(featureMap.values()),
+    features: Array.from(featureMap.values()).map((f) => ({
+      ...f,
+      properties: { ...f.properties, area: geometryArea(f.geometry) },
+    })),
   };
 
   console.log(
     `${matchedCount}/${events.length} events matched across ${featureMap.size} unique map features`,
   );
-
-  // const sorted = [...failureShapes.entries()].sort((a, b) => b[1].count - a[1].count);
-  // for (const [shape, { count, example }] of sorted) {
-  //   console.log(`\n[${count}] ${shape}`);
-  //   console.log(`  e.g. ${example}`);
-  // }
 
   writeGeoJSON(featureCollection);
 }
