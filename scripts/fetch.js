@@ -11,6 +11,30 @@ const {
   fallbackDistrictTypes,
 } = require("./config");
 
+const RETRY_STATUSES = [429, 500, 502, 503, 504];
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchWithRetry(url) {
+  for (const delay of [...RETRY_DELAYS_MS, null]) {
+    let response;
+    try {
+      response = await fetch(url);
+    } catch (err) {
+      if (!(err instanceof TypeError) || delay === null) throw err;
+      console.warn(`${err.message}, retrying in ${delay / 1000}s:`, url);
+      await wait(delay);
+      continue;
+    }
+
+    if (!RETRY_STATUSES.includes(response.status) || delay === null)
+      return response;
+    console.warn(`HTTP ${response.status}, retrying in ${delay / 1000}s:`, url);
+    await wait(delay);
+  }
+}
+
 async function fetchAll(
   baseUrl,
   { extraParams = {}, extractArray = (d) => d } = {},
@@ -26,7 +50,7 @@ async function fetchAll(
     });
     const url = `${baseUrl}?${params.toString()}`;
 
-    const response = await fetch(url);
+    const response = await fetchWithRetry(url);
     if (!response.ok) {
       throw new Error(`HTTP error: ${response.status} for ${url}`);
     }
@@ -77,7 +101,9 @@ async function fetchSegment(onStreet, fromStreet, toStreet, boroughCodeStr) {
     DisplayFormat: "JSON",
     Key: GOAT_API_KEY,
   });
-  const response = await fetch(`${GOAT_SEGMENT_API}?${params.toString()}`);
+  const response = await fetchWithRetry(
+    `${GOAT_SEGMENT_API}?${params.toString()}`,
+  );
   if (!response.ok)
     throw new Error(`GOAT Function 3 HTTP error: ${response.status}`);
   return response.json();
