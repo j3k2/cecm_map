@@ -1,113 +1,32 @@
 const fs = require("fs");
 
-const EVENTS_API = "https://data.cityofnewyork.us/resource/tvpp-9vvx.json";
-const PARKS_PERMIT_API =
-  "https://data.cityofnewyork.us/resource/c5vm-g2dk.geojson";
-const ATHLETICS_API =
-  "https://data.cityofnewyork.us/resource/qnem-b8re.geojson";
-const PARKS_PROPERTIES_API =
-  "https://data.cityofnewyork.us/resource/enfh-gkve.geojson";
-
-const GOAT_SEGMENT_API =
-  "https://geoservice.planning.nyc.gov/geoservice/geoservice.svc/Function_3";
-// const GOAT_STRETCH_API = 'https://geoservice.planning.nyc.gov/geoservice/geoservice.svc/Function_3S';
-const GOAT_API_KEY = process.env.GOAT_API_KEY;
+const {
+  EVENTS_API,
+  GOAT_API_KEY,
+  OUTPUT_FILENAME,
+  WEEK_FILTER,
+  FALLBACK_DISTRICT,
+  fallbackDistrictTypes,
+  boroughCodes,
+} = require("./scripts/config");
+const {
+  fetchAll,
+  loadReferenceData,
+  fetchSegment,
+} = require("./scripts/fetch");
+const {
+  parseLocation,
+  getSportCode,
+  parseFacilityText,
+  normalizeFieldId,
+} = require("./scripts/parsers");
+const { geometryArea } = require("./scripts/geometry");
 
 if (!GOAT_API_KEY) {
   console.error(
     "GOAT API key must be added to .env file: GOAT_API_KEY: <KEY_VALUE>",
   );
   process.exit(1);
-}
-
-const OUTPUT_FILENAME = "events-features.geojson";
-const WEEK_FILTER = true;
-const PAGE_SIZE = 1000;
-const OFFSET_MAX = 10; // for testing only
-const applyOffsetMax = false; // for testing only
-const FALLBACK_DISTRICT = "police_precinct";
-
-const FALLBACK_DISTRICTS = {
-  community_district: {
-    api: "https://data.cityofnewyork.us/resource/5crt-au7u.geojson",
-    idField: "boro_cd", // borough digit + board number, e.g. 412
-    label: "Community District",
-    getIds: (event) => {
-      const digit = Number(boroughCode[event.event_borough?.toUpperCase()]);
-      if (!digit) return [];
-      return String(event.community_board || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((board) => digit * 100 + Number(board));
-    },
-  },
-  police_precinct: {
-    api: "https://data.cityofnewyork.us/resource/y76i-bdw7.geojson",
-    idField: "precinct",
-    label: "Police Precinct",
-    getIds: (event) =>
-      String(event.police_precinct || "")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map(Number),
-  },
-};
-
-async function fetchAll(
-  baseUrl,
-  { extraParams = {}, extractArray = (d) => d } = {},
-) {
-  const results = [];
-  let offset = 0;
-
-  while (true) {
-    const params = new URLSearchParams({
-      $limit: PAGE_SIZE,
-      $offset: offset,
-      ...extraParams,
-    });
-    const url = `${baseUrl}?${params.toString()}`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP error: ${response.status} for ${url}`);
-    }
-
-    const data = await response.json();
-    const batch = extractArray(data);
-    if (batch.length === 0) break;
-
-    results.push(...batch);
-    console.log(`Fetched ${results.length} from ${baseUrl}...`);
-
-    if (batch.length < PAGE_SIZE || (applyOffsetMax && offset > OFFSET_MAX))
-      break;
-    offset += PAGE_SIZE;
-  }
-
-  return results;
-}
-
-async function loadReferenceData() {
-  return {
-    parksPermitAreasData: await fetchAll(PARKS_PERMIT_API, {
-      extractArray: (d) => d.features,
-    }),
-    athleticFacilitiesData: await fetchAll(ATHLETICS_API, {
-      extractArray: (d) => d.features,
-    }),
-    parksPropertiesData: await fetchAll(PARKS_PROPERTIES_API, {
-      extractArray: (d) => d.features,
-    }),
-    fallbackDistricts: await fetchAll(
-      FALLBACK_DISTRICTS[FALLBACK_DISTRICT].api,
-      {
-        extractArray: (d) => d.features,
-      },
-    ),
-  };
 }
 
 function isValidGoatSegment(segment) {
@@ -118,41 +37,8 @@ function isValidGoatSegment(segment) {
   return !Number.isNaN(lat);
 }
 
-async function fetchSegment(onStreet, fromStreet, toStreet, boroughCodeStr) {
-  const params = new URLSearchParams({
-    Borough1: boroughCodeStr,
-    OnStreet: onStreet,
-    Borough2: boroughCodeStr,
-    FirstCrossStreet: fromStreet,
-    Borough3: boroughCodeStr,
-    SecondCrossStreet: toStreet,
-    DisplayFormat: "JSON",
-    Key: GOAT_API_KEY,
-  });
-  const response = await fetch(`${GOAT_SEGMENT_API}?${params.toString()}`);
-  if (!response.ok)
-    throw new Error(`GOAT Function 3 HTTP error: ${response.status}`);
-  return response.json();
-}
-
-function parseLocation(locationStr) {
-  // Street segments formatted as "X between Y and Z":
-  const match = locationStr.match(/^(.+?)\s+between\s+(.+?)\s+and\s+(.+)$/i);
-  if (!match) return null;
-  const [, onStreet, fromStreet, toStreet] = match.map((s) => s.trim());
-  return { onStreet, fromStreet, toStreet };
-}
-
-const boroughCode = {
-  MANHATTAN: "1",
-  BRONX: "2",
-  BROOKLYN: "3",
-  QUEENS: "4",
-  "STATEN ISLAND": "5",
-};
-
 async function getSegmentFeature(location_e, borough, event) {
-  const boroughCodeStr = boroughCode[borough?.toUpperCase()] || "1";
+  const boroughCodeStr = boroughCodes[borough?.toUpperCase()] || "1";
 
   const parsed = parseLocation(location_e);
   if (!parsed) {
@@ -213,70 +99,6 @@ function segmentToGeoJSON(segment, event) {
       borough: segment.out_boro_name1?.trim(),
     },
   };
-}
-
-const sportCodes = [
-  // more specific first
-  ["WHEELCHAIRFOOTBALL", "WFB"],
-  ["FLAGFOOTBALL", "FFB"],
-  ["LITTLELEAGUE", "BSB"],
-  ["MULTIPURPOSE", "MPPA"],
-  ["MULTIUSE", "MPPA"],
-  ["BASKETBALL", "BKB"],
-  ["BASEBALL", "BSB"],
-  ["CRICKET", "CRK"],
-  ["FRISBEE", "FRS"],
-  ["FOOTBALL", "FTB"],
-  ["HANDBALL", "HDB"],
-  ["HOCKEY", "HKY"],
-  ["KICKBALL", "KBL"],
-  ["LACROSSE", "LCS"],
-  ["NETBALL", "NTB"],
-  ["RUGBY", "RBY"],
-  ["SOCCER", "SCR"],
-  ["SOFTBALL", "SFB"],
-  ["TENNIS", "TNS"],
-  ["TRACK", "TRK"],
-  ["VOLLEYBALL", "VLB"],
-];
-
-function getSportCode(sportName) {
-  const normalized = sportName.toUpperCase().replace(/[\s-]+/g, ""); // remove spaces and dashes
-  let bestMatch = null;
-  let bestIndex = Infinity;
-
-  for (const [phrase, code] of sportCodes) {
-    const index = normalized.indexOf(phrase);
-    if (index !== -1 && index < bestIndex) {
-      bestIndex = index;
-      bestMatch = code;
-    }
-  }
-
-  return bestMatch;
-}
-
-function parseFacilityText(eventFacility) {
-  if (!eventFacility) return null;
-
-  // Identify and separate `sportName` and `fieldId` by dash or space.
-  // `fieldId` can be one letter, 1-3 numbers, or 1-3 numbers and one suffix letter.
-  const match = eventFacility.match(
-    /^(.+?)[\s-]+(\d{1,3}[A-Za-z]?|[A-Za-z])\b/,
-  );
-  if (match) {
-    return { sportName: match[1].trim(), fieldId: match[2] };
-  }
-
-  return { sportName: eventFacility.trim(), fieldId: null };
-}
-
-function normalizeFieldId(n) {
-  if (!n) return null;
-  return n
-    .replace(/[^a-zA-Z0-9]/g, "") // remove spaces/dashes/punctuation
-    .replace(/^0+(?=\d)/, "") // remove leading zeroes
-    .toUpperCase();
 }
 
 function getPropertyNames(eventProperty) {
@@ -461,7 +283,7 @@ function getFeatureByCemsid(cemsid, parksPermitAreasData) {
 }
 
 function getFeaturesFromDistrict(event, fallbackDistricts) {
-  const area = FALLBACK_DISTRICTS[FALLBACK_DISTRICT];
+  const area = fallbackDistrictTypes[FALLBACK_DISTRICT];
   return area.getIds(event).flatMap((id) => {
     const polygon = fallbackDistricts.find(
       (f) => Number(f.properties[area.idField]) === id,
@@ -541,45 +363,6 @@ async function getFeaturesFromEvent(
 
   // Fallback to district if no match found:
   return getFeaturesFromDistrict(event, fallbackDistricts);
-}
-
-// Approximate area in square miles (flat projection near NYC)
-const METERS_PER_DEG_LAT = 110574;
-const METERS_PER_DEG_LON = 111320 * Math.cos((40.7 * Math.PI) / 180);
-const SQ_METERS_PER_SQ_MILE = 2589988;
-
-function ringArea(ring) {
-  // Shoelace formula for calculating the area of the linear ring of a polygon:
-  let sum = 0;
-  for (let i = 0; i < ring.length - 1; i++) {
-    const x1 = ring[i][0] * METERS_PER_DEG_LON;
-    const y1 = ring[i][1] * METERS_PER_DEG_LAT;
-    const x2 = ring[i + 1][0] * METERS_PER_DEG_LON;
-    const y2 = ring[i + 1][1] * METERS_PER_DEG_LAT;
-    sum += x1 * y2 - x2 * y1;
-  }
-  return Math.abs(sum) / 2;
-}
-
-function polygonArea([outer, ...holes]) {
-  return ringArea(outer) - holes.reduce((sum, h) => sum + ringArea(h), 0);
-}
-
-function geometryArea(geometry) {
-  if (geometry.type === "Polygon") {
-    return polygonArea(geometry.coordinates) / SQ_METERS_PER_SQ_MILE;
-  }
-  if (geometry.type === "MultiPolygon") {
-    return geometry.coordinates.reduce(
-      (sum, polygon) => sum + polygonArea(polygon) / SQ_METERS_PER_SQ_MILE,
-      0,
-    );
-  }
-  if (geometry.type === "GeometryCollection") {
-    return geometry.geometries.reduce((sum, g) => sum + geometryArea(g), 0);
-  }
-  // Lines have 0 area:
-  return 0;
 }
 
 function writeGeoJSON(featureCollection) {

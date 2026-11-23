@@ -1,4 +1,4 @@
 events-features.geojson
 .env
-config.js
+app/config.js
 node_modules
